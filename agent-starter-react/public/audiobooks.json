@@ -1,0 +1,10 @@
+[
+  {
+    "id": "snow-white-001",
+    "title": "Snow White and the 7 Dwarf",
+    "author": "The Brothers Grimm",
+    "cover_image": "/images/snow_white_cover.jpg",
+    "audio_file": "/audio/snow_white.mp3",
+    "duration": 1373
+  }
+]

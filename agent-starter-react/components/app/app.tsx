@@ -14,6 +14,7 @@ import { Toaster } from '@/components/livekit/toaster';
 import { useAgentErrors } from '@/hooks/useAgentErrors';
 import { useDebugMode } from '@/hooks/useDebug';
 import { getSandboxTokenSource } from '@/lib/utils';
+import { AudioPlayer } from '@/components/app/audio-player';
 
 const IN_DEVELOPMENT = process.env.NODE_ENV !== 'production';
 
@@ -29,6 +30,10 @@ interface AppProps {
 }
 
 export function App({ appConfig }: AppProps) {
+  // Show audio player UI instead of the original starter code
+  return <AudioPlayer />;
+
+  /* ORIGINAL STARTER CODE - COMMENTED OUT FOR NOW
   const tokenSource = useMemo(() => {
     return typeof process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT === 'string'
       ? getSandboxTokenSource(appConfig)
@@ -51,4 +56,5 @@ export function App({ appConfig }: AppProps) {
       <Toaster />
     </SessionProvider>
   );
+  */
 }
