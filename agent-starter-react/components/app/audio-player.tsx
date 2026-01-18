@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Pause, Play, SkipBack, SkipForward } from '@phosphor-icons/react';
+import { useSessionContext } from '@livekit/components-react';
 
 interface Audiobook {
   id: string;
@@ -13,12 +14,15 @@ interface Audiobook {
 }
 
 export function AudioPlayer() {
+  const session = useSessionContext();
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [audiobook, setAudiobook] = useState<Audiobook | null>(null);
+  const [volume, setVolume] = useState(1.0); // 1.0 = full volume, 0.2 = ducked
   const audioRef = useRef<HTMLAudioElement>(null);
+  const resumeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch audiobook data
   useEffect(() => {
@@ -36,6 +40,102 @@ export function AudioPlayer() {
       })
       .catch((error) => console.error('Error loading audiobook data:', error));
   }, []);
+
+  // Apply volume changes to audio element
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = volume;
+    }
+  }, [volume]);
+
+  // Listen for data channel messages from the agent
+  useEffect(() => {
+    if (!session.room) return;
+
+    const handleDataReceived = (payload: Uint8Array, participant?: any) => {
+      const decoder = new TextDecoder();
+      const message = decoder.decode(payload);
+
+      console.log('[AudioPlayer] Received data:', message);
+
+      try {
+        const data = JSON.parse(message);
+        console.log('[AudioPlayer] Parsed command:', data);
+
+        // Handle commands from agent
+        if (data.action === 'pause_audiobook') {
+          console.log('[AudioPlayer] ⏸️ PAUSING audiobook');
+          // Duck the audio when user is speaking
+          setVolume(0.2);
+          if (audioRef.current && isPlaying) {
+            audioRef.current.pause();
+            setIsPlaying(false);
+          }
+        } else if (data.action === 'resume_audiobook') {
+          console.log('[AudioPlayer] ▶️ RESUMING audiobook in 2.5s');
+          // Resume after agent finishes speaking
+          clearResumeTimer();
+          resumeTimerRef.current = setTimeout(() => {
+            setVolume(1.0);
+            if (audioRef.current) {
+              audioRef.current.play();
+              setIsPlaying(true);
+            }
+          }, 2500); // 2.5 second delay
+        } else if (data.action === 'seek' && typeof data.time === 'number') {
+          // Semantic navigation
+          console.log('[AudioPlayer] ⏩ SEEKING to', data.time);
+          if (audioRef.current) {
+            audioRef.current.currentTime = data.time;
+          }
+        }
+      } catch (e) {
+        // Ignore non-JSON messages
+        console.log('[AudioPlayer] Non-JSON message, ignoring');
+      }
+    };
+
+    console.log('[AudioPlayer] Setting up data channel listener');
+    session.room.on('dataReceived', handleDataReceived);
+
+    return () => {
+      console.log('[AudioPlayer] Cleaning up data channel listener');
+      session.room?.off('dataReceived', handleDataReceived);
+    };
+  }, [session.room, isPlaying]);
+
+  // Helper to clear resume timer
+  const clearResumeTimer = () => {
+    if (resumeTimerRef.current) {
+      clearTimeout(resumeTimerRef.current);
+      resumeTimerRef.current = null;
+    }
+  };
+
+  // Send playback state to agent periodically
+  useEffect(() => {
+    if (!session.room || !session.isConnected) return;
+
+    const sendPlaybackState = () => {
+      const encoder = new TextEncoder();
+      const state = {
+        type: 'playback_state',
+        status: isPlaying ? 'playing' : 'paused',
+        current_time: currentTime,
+        duration: duration,
+      };
+      const data = encoder.encode(JSON.stringify(state));
+      session.room?.localParticipant?.publishData(data, { reliable: true });
+    };
+
+    // Send state every second
+    const interval = setInterval(sendPlaybackState, 1000);
+
+    // Send immediately on state change
+    sendPlaybackState();
+
+    return () => clearInterval(interval);
+  }, [session.room, session.isConnected, isPlaying, currentTime, duration]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -65,6 +165,7 @@ export function AudioPlayer() {
       audio.removeEventListener('loadedmetadata', updateDuration);
       audio.removeEventListener('durationchange', updateDuration);
       audio.removeEventListener('ended', handleEnded);
+      clearResumeTimer();
     };
   }, [audiobook]);
 

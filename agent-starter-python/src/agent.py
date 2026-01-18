@@ -1,4 +1,5 @@
 import logging
+import json
 
 from dotenv import load_dotenv
 from livekit import rtc
@@ -23,10 +24,16 @@ load_dotenv(".env.local")
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="""You are a helpful voice AI assistant. The user is interacting with you via voice, even if you perceive the conversation as text.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
-            Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.""",
+            instructions="""You are a helpful voice AI audiobook companion. The user is listening to an audiobook while talking to you.
+            When the user speaks, the audiobook pauses automatically. After you finish responding, it will resume.
+
+            You can:
+            - Answer questions about the story, characters, or plot
+            - Provide context or explanations about what's happening
+            - Discuss themes and literary elements
+
+            Your responses are concise, conversational, and spoken naturally without formatting symbols or emojis.
+            You are knowledgeable, friendly, and enthusiastic about helping users enjoy their audiobook.""",
         )
 
     # To add tools, use the @function_tool decorator.
@@ -105,6 +112,30 @@ async def my_agent(ctx: JobContext):
     # # Start the avatar and wait for it to join
     # await avatar.start(session, room=ctx.room)
 
+    # Track playback state from frontend
+    playback_state = {"status": "paused", "current_time": 0}
+
+    def handle_data_received(data: rtc.DataPacket):
+        """Handle data channel messages from frontend"""
+        nonlocal playback_state
+        try:
+            message = json.loads(data.data.decode("utf-8"))
+            if message.get("type") == "playback_state":
+                playback_state = message
+                logger.info(f"Playback state: {playback_state}")
+        except Exception as e:
+            logger.error(f"Error handling data: {e}")
+
+    # Listen for data packets
+    ctx.room.on("data_received", handle_data_received)
+
+    async def send_audiobook_command(action: str, **kwargs):
+        """Send control commands to the audiobook player"""
+        command = {"action": action, **kwargs}
+        data = json.dumps(command).encode("utf-8")
+        await ctx.room.local_participant.publish_data(data, reliable=True)
+        logger.info(f"Sent audiobook command: {command}")
+
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
         agent=Assistant(),
@@ -120,6 +151,28 @@ async def my_agent(ctx: JobContext):
 
     # Join the room and connect to the user
     await ctx.connect()
+
+    # State machine for audiobook control
+    was_playing_before_interruption = False
+    import asyncio
+
+    @session.on("user_state_changed")
+    def on_user_state_changed(event):
+        """User state changed - pause when user speaks"""
+        nonlocal was_playing_before_interruption
+        if event.new_state == "speaking":
+            # Remember if audiobook was playing when user interrupted
+            was_playing_before_interruption = playback_state.get("status") == "playing"
+            if was_playing_before_interruption:
+                asyncio.create_task(send_audiobook_command("pause_audiobook"))
+
+    @session.on("agent_state_changed")
+    def on_agent_state_changed(event):
+        """Agent state changed - resume when agent finishes speaking"""
+        nonlocal was_playing_before_interruption
+        if event.new_state == "listening" and event.old_state == "speaking" and was_playing_before_interruption:
+            asyncio.create_task(send_audiobook_command("resume_audiobook"))
+            was_playing_before_interruption = False
 
 
 if __name__ == "__main__":

@@ -88,9 +88,9 @@ export function LiveAudioChat() {
   };
 
   return (
-    <div className="flex h-full flex-col bg-gradient-to-br from-indigo-50 to-purple-50">
+    <div className="flex h-full flex-col bg-white">
       {/* Header */}
-      <div className="border-b border-indigo-200 bg-white/80 px-6 py-4 backdrop-blur-sm">
+      <div className="border-b border-gray-200 px-6 py-6">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-gray-900">AI Assistant</h2>
@@ -105,8 +105,8 @@ export function LiveAudioChat() {
               className={cn(
                 'rounded-full px-3 py-1 text-xs font-medium',
                 session.isConnected
-                  ? 'bg-green-100 text-green-700'
-                  : 'bg-gray-100 text-gray-700'
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-gray-200 text-gray-700'
               )}
             >
               {session.isConnected ? 'Connected' : 'Disconnected'}
@@ -119,10 +119,10 @@ export function LiveAudioChat() {
       <ScrollArea ref={scrollAreaRef} className="flex-1 px-6 py-4">
         {!session.isConnected && messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-center">
-            <div className="mb-4 rounded-full bg-indigo-100 p-6">
-              <Phone size={48} className="text-indigo-600" weight="duotone" />
+            <div className="mb-6 rounded-full bg-gray-100 p-8">
+              <Phone size={56} className="text-gray-900" weight="fill" />
             </div>
-            <h3 className="mb-2 text-lg font-semibold text-gray-900">
+            <h3 className="mb-2 text-lg font-bold text-gray-900">
               Connect to AI Assistant
             </h3>
             <p className="mb-6 max-w-sm text-sm text-gray-600">
@@ -133,7 +133,7 @@ export function LiveAudioChat() {
         )}
 
         {messages.length > 0 && (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -146,15 +146,15 @@ export function LiveAudioChat() {
                   className={cn(
                     'max-w-[80%] rounded-2xl px-4 py-3',
                     message.sender === 'user'
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-white text-gray-900 shadow-sm'
+                      ? 'bg-gray-900 text-white'
+                      : 'bg-gray-100 text-gray-900'
                   )}
                 >
                   <p className="text-sm leading-relaxed">{message.text}</p>
                   <p
                     className={cn(
                       'mt-1 text-xs',
-                      message.sender === 'user' ? 'text-indigo-200' : 'text-gray-500'
+                      message.sender === 'user' ? 'text-gray-400' : 'text-gray-500'
                     )}
                   >
                     {message.timestamp.toLocaleTimeString([], {
@@ -171,15 +171,15 @@ export function LiveAudioChat() {
         {/* Agent Typing Indicator */}
         {agentState === 'thinking' && (
           <div className="flex justify-start">
-            <div className="max-w-[80%] rounded-2xl bg-white px-4 py-3 shadow-sm">
+            <div className="max-w-[80%] rounded-2xl bg-gray-100 px-4 py-3">
               <div className="flex gap-1">
-                <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400" />
+                <div className="h-2 w-2 animate-bounce rounded-full bg-gray-600" />
                 <div
-                  className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
+                  className="h-2 w-2 animate-bounce rounded-full bg-gray-600"
                   style={{ animationDelay: '0.1s' }}
                 />
                 <div
-                  className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
+                  className="h-2 w-2 animate-bounce rounded-full bg-gray-600"
                   style={{ animationDelay: '0.2s' }}
                 />
               </div>
@@ -190,12 +190,12 @@ export function LiveAudioChat() {
 
       {/* Audio Visualizer (when speaking or listening) */}
       {session.isConnected && (agentState === 'speaking' || agentState === 'listening') && (
-        <div className="border-t border-indigo-200 bg-white/50 px-6 py-3 backdrop-blur-sm">
+        <div className="border-t border-gray-200 bg-gray-50 px-6 py-4">
           <div className="flex items-center justify-center gap-1">
             {[...Array(20)].map((_, i) => (
               <div
                 key={i}
-                className="bg-indigo-500 w-1 rounded-full"
+                className="bg-gray-900 w-1 rounded-full"
                 style={{
                   height: `${Math.random() * 40 + 10}px`,
                   animationName: 'pulse',
@@ -211,19 +211,19 @@ export function LiveAudioChat() {
       )}
 
       {/* Control Bar */}
-      <div className="border-t border-indigo-200 bg-white/80 px-6 py-4 backdrop-blur-sm">
-        <div className="flex items-center justify-center gap-4">
+      <div className="border-t border-gray-200 bg-white px-6 py-6">
+        <div className="flex items-center justify-center gap-3">
           {/* Microphone Toggle */}
           <button
             onClick={handleMicToggle}
             disabled={!session.isConnected}
             className={cn(
-              'flex h-14 w-14 items-center justify-center rounded-full transition-all',
+              'flex h-14 w-14 items-center justify-center rounded-full border-2 transition-all',
               session.isConnected
                 ? isMicMuted
-                  ? 'bg-red-500 text-white hover:bg-red-600'
-                  : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  ? 'border-gray-900 bg-gray-900 text-white hover:bg-gray-800'
+                  : 'border-gray-900 bg-white text-gray-900 hover:bg-gray-50'
+                : 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
             )}
           >
             {isMicMuted ? (
@@ -239,8 +239,8 @@ export function LiveAudioChat() {
             className={cn(
               'flex h-16 w-16 items-center justify-center rounded-full transition-all',
               session.isConnected
-                ? 'bg-red-500 text-white hover:bg-red-600'
-                : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                ? 'bg-gray-900 text-white hover:bg-gray-800'
+                : 'bg-gray-900 text-white hover:bg-gray-800'
             )}
           >
             {session.isConnected ? (
@@ -252,7 +252,7 @@ export function LiveAudioChat() {
         </div>
 
         {/* Helper Text */}
-        <p className="mt-3 text-center text-xs text-gray-600">
+        <p className="mt-4 text-center text-xs text-gray-600">
           {session.isConnected
             ? 'Speak naturally - the AI can hear you'
             : 'Click the phone button to start chatting'}
