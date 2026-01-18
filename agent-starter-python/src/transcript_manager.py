@@ -3,13 +3,26 @@ Transcript Manager for Context-Aware Audiobook Companion
 
 Handles time-based indexing of audiobook transcripts and extracts
 relevant context based on playback position.
+
+Supports both:
+- VTT files with exact timestamps (preferred)
+- Plain text files with WPM-based timing (fallback)
 """
 
 import os
 import json
+import re
 from dataclasses import dataclass
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple
 from openai import AsyncOpenAI
+
+
+@dataclass
+class TimestampedWord:
+    """Represents a word with its exact timestamp from VTT file."""
+    word: str
+    start_time: float
+    end_time: float
 
 
 @dataclass
@@ -42,8 +55,8 @@ class TranscriptManager:
         Initialize transcript manager.
 
         Args:
-            transcript_path: Path to transcript text file
-            estimated_wpm: Narrator's words per minute (default: 120)
+            transcript_path: Path to transcript file (.txt or .vtt)
+            estimated_wpm: Narrator's words per minute (default: 120, only used for .txt files)
             openai_api_key: OpenAI API key for LLM-based semantic search
         """
         self.transcript_path = transcript_path
@@ -53,10 +66,23 @@ class TranscriptManager:
         # Initialize OpenAI client for LLM-based semantic search
         self.openai_client = AsyncOpenAI(api_key=openai_api_key) if openai_api_key else None
 
-        # Load and parse transcript
-        self.transcript = self._load_transcript()
-        self.words = self.transcript.split()
-        self.total_words = len(self.words)
+        # Detect file type and load accordingly
+        self.is_vtt = transcript_path.lower().endswith('.vtt')
+
+        if self.is_vtt:
+            # Load VTT file with exact timestamps
+            self.timestamped_words = self._parse_vtt()
+            self.transcript = " ".join([w.word for w in self.timestamped_words])
+            self.words = [w.word for w in self.timestamped_words]
+            self.total_words = len(self.words)
+            self.total_duration = self.timestamped_words[-1].end_time if self.timestamped_words else 0.0
+        else:
+            # Load plain text file with WPM-based timing
+            self.timestamped_words = []
+            self.transcript = self._load_transcript()
+            self.words = self.transcript.split()
+            self.total_words = len(self.words)
+            self.total_duration = self.total_words / self.words_per_second
 
         # Character aliases for tracking
         self.main_characters = {
@@ -79,6 +105,120 @@ class TranscriptManager:
         with open(self.transcript_path, "r", encoding="utf-8") as f:
             return f.read().strip()
 
+    def _parse_vtt(self) -> List[TimestampedWord]:
+        """
+        Parse VTT file with exact word-level timestamps.
+
+        YouTube VTT files contain word-level timing tags like:
+        it<00:00:12.320><c> was</c><00:00:12.559><c> the</c>
+
+        We extract these to get precise per-word timestamps.
+
+        Returns:
+            List of TimestampedWord objects with precise timing
+        """
+        if not os.path.exists(self.transcript_path):
+            raise FileNotFoundError(f"VTT file not found: {self.transcript_path}")
+
+        with open(self.transcript_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        timestamped_words = []
+
+        # Pattern to match VTT timestamp lines: "00:00:04.160 --> 00:00:05.910"
+        timestamp_pattern = re.compile(r'(\d{2}):(\d{2}):(\d{2}\.\d{3}) --> (\d{2}):(\d{2}):(\d{2}\.\d{3})')
+        # Pattern to match word-level timestamps: word<00:00:12.320>
+        word_time_pattern = re.compile(r'([^<]+)<(\d{2}):(\d{2}):(\d{2}\.\d{3})>')
+
+        lines = content.split('\n')
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].strip()
+
+            # Match timestamp line
+            match = timestamp_pattern.match(line)
+            if match:
+                # Parse segment start/end time for fallback
+                start_h, start_m, start_s = int(match.group(1)), int(match.group(2)), float(match.group(3))
+                segment_start = start_h * 3600 + start_m * 60 + start_s
+
+                end_h, end_m, end_s = int(match.group(4)), int(match.group(5)), float(match.group(6))
+                segment_end = end_h * 3600 + end_m * 60 + end_s
+
+                # Next line(s) contain the text with word-level timestamps
+                i += 1
+                text_lines = []
+                while i < len(lines) and lines[i].strip() and not timestamp_pattern.match(lines[i]):
+                    # Skip alignment markers
+                    if not lines[i].strip().startswith('align:'):
+                        text_lines.append(lines[i].strip())
+                    i += 1
+
+                # Process each line for word-level timestamps
+                for text_line in text_lines:
+                    # Skip empty lines and metadata
+                    if not text_line or text_line == '[Music]':
+                        continue
+
+                    # ONLY process lines that have word-level timestamp tags
+                    # Lines without tags are just accumulated caption text (duplicates)
+                    if '<' not in text_line:
+                        continue
+
+                    # Remove <c> and </c> tags first
+                    text_line = text_line.replace('<c>', '').replace('</c>', '')
+
+                    # Parse the line structure:
+                    # "first_word<timestamp1> second_word<timestamp2> ..."
+                    # Split by < to separate text and timestamps
+                    parts = text_line.split('<')
+
+                    word_times = []
+                    # First part might be a word without timestamp
+                    if parts[0].strip():
+                        # This word uses the segment start time
+                        word_times.append((parts[0].strip(), segment_start))
+
+                    # Process remaining parts (word<timestamp pairs)
+                    for part in parts[1:]:
+                        if '>' in part:
+                            timestamp_str, remaining = part.split('>', 1)
+                            # Parse timestamp
+                            try:
+                                time_match = re.match(r'(\d{2}):(\d{2}):(\d{2}\.\d{3})', timestamp_str)
+                                if time_match:
+                                    h, m, s = int(time_match.group(1)), int(time_match.group(2)), float(time_match.group(3))
+                                    word_time = h * 3600 + m * 60 + s
+
+                                    # The text AFTER the timestamp is what gets that timestamp
+                                    if remaining.strip():
+                                        word_times.append((remaining.strip(), word_time))
+                            except:
+                                pass
+
+                    if word_times:
+                        # Add words with their timestamps
+                        for idx, (word_text, word_time) in enumerate(word_times):
+                            # Determine end time (next word's start or segment end)
+                            if idx + 1 < len(word_times):
+                                end_time = word_times[idx + 1][1]
+                            else:
+                                end_time = segment_end
+
+                            # Clean and add each word
+                            for word in word_text.split():
+                                clean_word = word.strip('.,!?;:')
+                                if clean_word:
+                                    timestamped_words.append(TimestampedWord(
+                                        word=clean_word,
+                                        start_time=word_time,
+                                        end_time=end_time
+                                    ))
+            i += 1
+
+        return timestamped_words
+
     def get_context_at_time(
         self, current_seconds: float, context_window_seconds: float = 180
     ) -> Dict:
@@ -96,29 +236,62 @@ class TranscriptManager:
                 - character_mentions: Dict of which characters have appeared
                 - estimated_position: Percentage through story
         """
-        # Calculate word index at current time
-        current_word_index = int(current_seconds * self.words_per_second)
-        current_word_index = min(current_word_index, self.total_words)
+        # Check if we're beyond the actual content duration
+        beyond_duration = current_seconds >= self.total_duration
 
-        # Get context window (last N seconds of heard content)
-        context_start_seconds = max(0, current_seconds - context_window_seconds)
-        context_start_index = int(context_start_seconds * self.words_per_second)
+        if self.is_vtt:
+            # Use exact timestamps from VTT file
+            # Clamp current_seconds to actual duration
+            clamped_current_seconds = min(current_seconds, self.total_duration)
 
-        # Extract heard text
-        heard_words = self.words[context_start_index:current_word_index]
-        heard_text = " ".join(heard_words)
+            if beyond_duration:
+                # Return ALL words when beyond duration (for compatibility)
+                heard_words = [w.word for w in self.timestamped_words]
+            else:
+                # Normal case: return context window
+                context_start_seconds = max(0, clamped_current_seconds - context_window_seconds)
+                heard_words = [
+                    w.word for w in self.timestamped_words
+                    if context_start_seconds <= w.start_time <= clamped_current_seconds
+                ]
+
+            # Find all words heard so far for character tracking
+            all_heard_words = [
+                w.word for w in self.timestamped_words
+                if w.start_time <= clamped_current_seconds
+            ]
+
+            heard_text = " ".join(heard_words)
+            all_heard_text = " ".join(all_heard_words)
+
+            # Calculate progress based on actual time (clamp to 100% max)
+            progress_percent = min(100, (current_seconds / self.total_duration) * 100) if self.total_duration > 0 else 0
+
+        else:
+            # Use WPM-based timing for plain text files
+            current_word_index = int(current_seconds * self.words_per_second)
+            current_word_index = min(current_word_index, self.total_words)
+
+            if beyond_duration:
+                # Return ALL words when beyond duration
+                heard_words = self.words[:]
+            else:
+                # Normal case: return context window
+                context_start_seconds = max(0, current_seconds - context_window_seconds)
+                context_start_index = int(context_start_seconds * self.words_per_second)
+                heard_words = self.words[context_start_index:current_word_index]
+
+            heard_text = " ".join(heard_words)
+            all_heard_text = " ".join(self.words[:current_word_index])
+
+            progress_percent = (current_word_index / self.total_words) * 100 if self.total_words > 0 else 0
 
         # Track character appearances
         character_mentions = {}
         for char_name, aliases in self.main_characters.items():
             character_mentions[char_name] = any(
-                alias in heard_text.lower() for alias in aliases
+                alias in all_heard_text.lower() for alias in aliases
             )
-
-        # Calculate progress
-        progress_percent = (
-            (current_word_index / self.total_words) * 100 if self.total_words > 0 else 0
-        )
 
         return {
             "heard_so_far": heard_text,
@@ -140,10 +313,20 @@ class TranscriptManager:
         Returns:
             Complete text heard from start to current_seconds
         """
-        current_word_index = int(current_seconds * self.words_per_second)
-        current_word_index = min(current_word_index, self.total_words)
+        if self.is_vtt:
+            # Use exact timestamps from VTT file
+            # Clamp current_seconds to actual duration
+            clamped_current_seconds = min(current_seconds, self.total_duration)
+            heard_words = [
+                w.word for w in self.timestamped_words
+                if w.start_time <= clamped_current_seconds
+            ]
+        else:
+            # Use WPM-based timing for plain text files
+            current_word_index = int(current_seconds * self.words_per_second)
+            current_word_index = min(current_word_index, self.total_words)
+            heard_words = self.words[:current_word_index]
 
-        heard_words = self.words[:current_word_index]
         return " ".join(heard_words)
 
     def check_character_appeared(self, current_seconds: float, character_name: str) -> bool:
@@ -169,12 +352,15 @@ class TranscriptManager:
 
     def get_total_duration_estimate(self) -> float:
         """
-        Estimate total audiobook duration in seconds based on word count and WPM.
+        Get total audiobook duration in seconds.
+
+        For VTT files: Returns exact duration from timestamps
+        For text files: Estimates based on word count and WPM
 
         Returns:
-            Estimated duration in seconds
+            Duration in seconds
         """
-        return self.total_words / self.words_per_second
+        return self.total_duration
 
     def _create_chunks(self) -> List[Chunk]:
         """
@@ -199,8 +385,14 @@ class TranscriptManager:
             chunk_text = " ".join(chunk_words)
 
             # Calculate timestamps
-            start_time = start_idx / self.words_per_second
-            end_time = end_idx / self.words_per_second
+            if self.is_vtt:
+                # Use exact timestamps from VTT file
+                start_time = self.timestamped_words[start_idx].start_time
+                end_time = self.timestamped_words[end_idx - 1].end_time
+            else:
+                # Use WPM-based estimation
+                start_time = start_idx / self.words_per_second
+                end_time = end_idx / self.words_per_second
 
             # Extract keywords (lowercase unique words)
             keywords = set(word.lower() for word in chunk_words)
@@ -265,8 +457,12 @@ Here is the complete audiobook transcript:
 
 Your task:
 1. Find the section of the transcript that best matches what the user is looking for
-2. If found, return the approximate position as a percentage (0-100) of where this content appears in the transcript
-3. Also provide a brief preview (50-100 characters) of the matching text
+2. IMPORTANT: Return the position of the BEGINNING/FIRST SENTENCE of that scene or section, NOT the middle
+3. Think about where the scene STARTS - this could be a few sentences before the most relevant content
+4. If found, return the approximate position as a percentage (0-100) of where this scene BEGINS in the transcript
+5. Also provide a brief preview (50-100 characters) of the FIRST sentence of that scene
+
+Example: If searching for "poison apple", find where the poison apple scene STARTS (e.g., "The queen disguised herself..."), not the middle of the scene.
 
 Respond ONLY with a JSON object in this exact format:
 {{"found": true/false, "position_percent": 0-100, "preview": "text preview here"}}
@@ -306,12 +502,19 @@ If the content is not found or the query doesn't match anything in the transcrip
             position_percent = result_data.get("position_percent", 0)
             position_percent = max(0, min(100, position_percent))  # Clamp to 0-100
 
-            # Calculate word index based on percentage of heard content
-            heard_word_count = len(heard_text.split())
-            target_word_index = int((position_percent / 100.0) * heard_word_count)
+            # Calculate word index based on percentage of transcript
+            target_word_index = int((position_percent / 100.0) * self.total_words)
+            target_word_index = min(target_word_index, self.total_words - 1)
 
             # Convert word index to time
-            target_time = target_word_index / self.words_per_second
+            if self.is_vtt:
+                # Use exact timestamp from VTT file
+                # But backtrack to find sentence start for better user experience
+                sentence_start_index = self._find_sentence_start(target_word_index)
+                target_time = self.timestamped_words[sentence_start_index].start_time
+            else:
+                # Use WPM-based estimation
+                target_time = target_word_index / self.words_per_second
 
             # Find the chunk containing this time for chunk_id
             target_chunk_id = -1
@@ -334,3 +537,40 @@ If the content is not found or the query doesn't match anything in the transcrip
             logger = logging.getLogger("agent")
             logger.error(f"LLM semantic search failed: {e}")
             raise
+
+    def _find_sentence_start(self, word_index: int, max_backtrack: int = 15) -> int:
+        """
+        Find the start of the sentence or phrase containing the given word index.
+
+        Backtracks from the given word index to find natural boundaries.
+        For transcripts with punctuation, looks for . ! ?
+        For unpunctuated transcripts (like YouTube captions), backtracks a
+        reasonable distance (max_backtrack words) to provide better context.
+
+        Args:
+            word_index: The word index to start from
+            max_backtrack: Maximum words to backtrack for unpunctuated text (default: 15)
+
+        Returns:
+            The word index of the sentence/phrase start
+        """
+        if word_index <= 0:
+            return 0
+
+        # Sentence-ending punctuation marks
+        sentence_endings = {'.', '!', '?'}
+
+        # Backtrack to find the previous sentence ending
+        # Start from word_index - 1 to check previous words
+        for i in range(word_index - 1, max(0, word_index - max_backtrack - 1), -1):
+            word = self.words[i]
+
+            # Check if this word ends with sentence-ending punctuation
+            if any(word.endswith(punct) for punct in sentence_endings):
+                # Found a sentence ending, so next word (i+1) is the start
+                return i + 1
+
+        # If no punctuation found within max_backtrack words,
+        # return the position max_backtrack words back
+        # This provides some context without going too far back
+        return max(0, word_index - max_backtrack)

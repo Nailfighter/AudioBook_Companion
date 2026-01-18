@@ -474,6 +474,10 @@ async def my_agent(ctx: JobContext):
         os.path.dirname(__file__),
         "../../agent-starter-react/public/transcript"
     )
+    captions_dir = os.path.join(
+        os.path.dirname(__file__),
+        "../../agent-starter-react/public/captions"
+    )
 
     for audiobook in audiobooks:
         audiobook_id = audiobook.get("id", "unknown")
@@ -486,7 +490,12 @@ async def my_agent(ctx: JobContext):
             base_name = audiobook_id.rsplit("-", 1)[0].replace("-", "_")
             transcript_filename = f"{base_name}_trans.txt"
 
-        transcript_path = os.path.join(transcript_dir, transcript_filename)
+        # Check if it's a VTT file (look in captions directory)
+        if transcript_filename.lower().endswith('.vtt'):
+            transcript_path = os.path.join(captions_dir, transcript_filename)
+        else:
+            # Plain text file (look in transcript directory)
+            transcript_path = os.path.join(transcript_dir, transcript_filename)
 
         # Load transcript if it exists
         if os.path.exists(transcript_path):

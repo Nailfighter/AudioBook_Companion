@@ -17,7 +17,12 @@
       "Bash(python -m pytest:*)",
       "Bash(/var/data/python/bin/pytest tests/test_transcript_manager.py::test_chunk_creation -v)",
       "Bash(PYTHONPATH=src /var/data/python/bin/pytest:*)",
-      "Bash(PYTHONPATH=. /var/data/python/bin/pytest:*)"
+      "Bash(PYTHONPATH=. /var/data/python/bin/pytest:*)",
+      "Bash(/var/data/python/bin/yt-dlp:*)",
+      "Bash(python:*)"
+    ],
+    "additionalDirectories": [
+      "/home/nailf/Desktop/AudioBook_Companion/agent-starter-react/public/captions"
     ]
   }
 }

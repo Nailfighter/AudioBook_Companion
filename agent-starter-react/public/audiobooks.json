@@ -6,7 +6,8 @@
     "cover_image": "/images/snow_white_cover.jpg",
     "audio_file": "/audio/snow_white.mp3",
     "duration": 1373,
-    "link": "https://www.youtube.com/watch?v=YzP5pFPvLg8"
+    "link": "https://www.youtube.com/watch?v=YzP5pFPvLg8",
+    "transcript_file": "snow_white.vtt"
   },
   {
     "id": "art-of-war-001",
@@ -15,6 +16,7 @@
     "cover_image": "/images/the_art_of_war_cover.jpg",
     "audio_file": "/audio/the_art_of_war.mp3",
     "duration": 4405,
-    "link": "https://www.youtube.com/watch?v=jxcMRkqaQdw"
+    "link": "https://www.youtube.com/watch?v=jxcMRkqaQdw",
+    "transcript_file": "art_of_war.vtt"
   }
 ]
