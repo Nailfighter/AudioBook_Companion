@@ -5,6 +5,16 @@
     "author": "The Brothers Grimm",
     "cover_image": "/images/snow_white_cover.jpg",
     "audio_file": "/audio/snow_white.mp3",
-    "duration": 1373
+    "duration": 1373,
+    "link": "https://www.youtube.com/watch?v=YzP5pFPvLg8"
+  },
+  {
+    "id": "art-of-war-001",
+    "title": "The Art of War",
+    "author": "Sun Tzu",
+    "cover_image": "/images/art_of_war_cover.jpg",
+    "audio_file": "/audio/the_art_of_war.mp3",
+    "duration": 4405,
+    "link": "https://www.youtube.com/watch?v=jxcMRkqaQdw"
   }
 ]

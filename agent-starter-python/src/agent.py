@@ -32,10 +32,14 @@ class ContextAwareAssistant(Agent):
         instructions: str,
         transcript_manager: TranscriptManager,
         playback_state_ref: dict,
+        room: rtc.Room,
+        state_machine_flags: dict,
     ) -> None:
         super().__init__(instructions=instructions)
         self.transcript_manager = transcript_manager
         self.playback_state_ref = playback_state_ref
+        self.room = room
+        self.state_machine_flags = state_machine_flags
 
     @function_tool
     async def get_story_context(self, context: RunContext) -> str:
@@ -79,6 +83,104 @@ class ContextAwareAssistant(Agent):
             return f"yes, {character_name} has appeared in the story"
         else:
             return f"no, {character_name} has not been mentioned yet (avoid spoilers!)"
+
+    @function_tool
+    async def pause_audiobook(self, context: RunContext) -> str:
+        """Pause the audiobook immediately.
+
+        Use when user says: "pause", "stop", "wait", "hold on"
+
+        Returns:
+            Confirmation message
+        """
+        command = {"action": "pause_audiobook"}
+        data = json.dumps(command).encode("utf-8")
+        await self.room.local_participant.publish_data(data, reliable=True)
+
+        # Clear state machine flags to prevent auto-resume
+        self.state_machine_flags["was_playing"] = False
+        self.state_machine_flags["in_conversation"] = False
+        self.state_machine_flags["resume_pending"] = False
+
+        logger.info("🎵 User requested pause via voice command (cleared state machine)")
+        return "Paused"
+
+    @function_tool
+    async def resume_audiobook(self, context: RunContext) -> str:
+        """Resume playing the audiobook.
+
+        Use when user says: "play", "resume", "continue", "start"
+
+        Returns:
+            Confirmation message
+        """
+        command = {"action": "resume_audiobook"}
+        data = json.dumps(command).encode("utf-8")
+        await self.room.local_participant.publish_data(data, reliable=True)
+
+        # Clear state machine flags to prevent conflicts
+        self.state_machine_flags["was_playing"] = False
+        self.state_machine_flags["in_conversation"] = False
+        self.state_machine_flags["resume_pending"] = False
+
+        logger.info("🎵 User requested resume via voice command (cleared state machine)")
+        return "Playing"
+
+    @function_tool
+    async def set_playback_speed(self, context: RunContext, speed: float) -> str:
+        """Set the audiobook playback speed.
+
+        Args:
+            speed: Playback speed from 0.25x to 2.0x
+
+        Use when user says: "speed up", "slow down", "play faster", "play slower", "set speed to 1.5x"
+
+        Returns:
+            Confirmation message
+        """
+        # Clamp speed between 0.25 and 2.0
+        speed = max(0.25, min(2.0, speed))
+
+        command = {"action": "set_speed", "speed": speed}
+        data = json.dumps(command).encode("utf-8")
+        await self.room.local_participant.publish_data(data, reliable=True)
+
+        logger.info(f"🎵 User requested speed: {speed}x")
+
+        return f"Speed {speed}x"
+
+    @function_tool
+    async def skip_time(self, context: RunContext, seconds: int) -> str:
+        """Skip forward or backward in the audiobook.
+
+        Args:
+            seconds: Positive = skip forward, Negative = rewind backward
+
+        Examples:
+            - "rewind 30 seconds" → seconds=-30
+            - "skip ahead 1 minute" → seconds=60
+            - "go back 2 minutes" → seconds=-120
+
+        Returns:
+            Confirmation message
+        """
+        current_time = self.playback_state_ref.get("current_time", 0)
+        new_time = max(0, current_time + seconds)  # Don't go below 0
+
+        command = {"action": "seek", "time": new_time}
+        data = json.dumps(command).encode("utf-8")
+        await self.room.local_participant.publish_data(data, reliable=True)
+
+        direction = "forward" if seconds > 0 else "back"
+        abs_seconds = abs(seconds)
+
+        logger.info(f"🎵 User requested skip {direction}: {abs_seconds}s (from {current_time:.1f}s to {new_time:.1f}s)")
+
+        if abs_seconds >= 60:
+            minutes = abs_seconds // 60
+            return f"Skipped {direction} {minutes} minute{'s' if minutes > 1 else ''}"
+        else:
+            return f"Skipped {direction} {abs_seconds} seconds"
 
     # To add tools, use the @function_tool decorator.
     # Here's an example that adds a simple weather tool.
@@ -294,6 +396,56 @@ The user is listening to {audiobook_metadata['title']}.
 - User: "What just happened?"
   → "Snow White just found the dwarves' cottage in the woods and went inside."
 
+**Playback Control Commands:**
+You can control audiobook playback when the user requests it. Listen for these phrases:
+
+- **Pause/Stop**: "pause", "stop", "wait", "hold on"
+  → Use pause_audiobook() tool
+
+- **Play/Resume**: "play", "resume", "continue", "start"
+  → Use resume_audiobook() tool
+
+- **Speed Up**: "speed up", "play faster", "faster"
+  → Get current speed from playback_state: self.playback_state_ref.get("playback_speed", 1.0)
+  → Use set_playback_speed() with current_speed + 0.25
+  → If user says specific speed like "1.5x" or "2x", use that exact value
+  → Speed range: 0.25x to 2.0x (will be clamped automatically)
+
+- **Slow Down**: "slow down", "play slower", "slower"
+  → Get current speed from playback_state: self.playback_state_ref.get("playback_speed", 1.0)
+  → Use set_playback_speed() with current_speed - 0.25
+  → Speed range: 0.25x to 2.0x (will be clamped automatically)
+
+- **Set Specific Speed**: "set speed to 1.5", "play at 2x speed"
+  → Use set_playback_speed() with the requested speed
+  → Speed range: 0.25x to 2.0x
+
+- **Skip Forward**: "skip ahead 1 minute", "fast forward 30 seconds"
+  → Use skip_time(seconds=60) or skip_time(seconds=30)
+  → Parse the time: "1 minute" = 60, "30 seconds" = 30
+
+- **Rewind**: "rewind 30 seconds", "go back a bit", "go back 2 minutes"
+  → Use skip_time(seconds=-30) or skip_time(seconds=-120)
+  → "a bit" = 30 seconds by default
+
+**Important for time parsing:**
+- Convert "X minutes" to seconds: multiply by 60
+- Convert "X seconds" to seconds: use as-is
+- Default amounts: "a bit" = 30 seconds, "ahead" = 60 seconds
+
+**Important for speed control:**
+- Default increment/decrement: 0.25x
+- Minimum speed: 0.25x (don't go below)
+- Maximum speed: 2.0x (don't go above)
+- Common speeds: 0.5x, 0.75x, 1.0x, 1.25x, 1.5x, 1.75x, 2.0x
+
+**Response style for commands:**
+- Keep confirmations VERY brief: just one word like "Paused", "Playing", "Muted"
+- For skip commands: "Skipped forward 1 minute" or "Skipped back 30 seconds"
+- NEVER add extra phrases like "Let me know if...", "Just ask if...", "Would you like..."
+- NEVER offer additional options after executing a command
+- Just confirm what was done and stop talking
+
 Remember: Answer the specific question asked. Be helpful and informative without spoiling future events!"""
 
         return instructions
@@ -302,10 +454,17 @@ Remember: Answer the specific question asked. Be helpful and informative without
     initial_instructions = create_context_aware_instructions()
     logger.info("Created context-aware instructions")
 
+    # State machine flags (shared with agent for voice control)
+    state_machine_flags = {
+        "was_playing": False,
+        "in_conversation": False,
+        "resume_pending": False
+    }
+
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
         agent=ContextAwareAssistant(
-            initial_instructions, transcript_manager, playback_state
+            initial_instructions, transcript_manager, playback_state, ctx.room, state_machine_flags
         ),
         room=ctx.room,
         room_options=room_io.RoomOptions(
@@ -321,25 +480,21 @@ Remember: Answer the specific question asked. Be helpful and informative without
     await ctx.connect()
 
     # State machine for audiobook control
-    was_playing_before_interruption = False
-    user_is_in_conversation = False
-    resume_pending = False  # Track if we've sent a resume command
     conversation_timeout_task = None
     import asyncio
 
     async def reset_conversation_after_timeout():
         """Reset conversation state after user stops talking for a while"""
-        nonlocal was_playing_before_interruption, user_is_in_conversation, resume_pending
         await asyncio.sleep(3.0)  # Wait 3 seconds of silence
         logger.info("⏱️ Conversation timeout - resetting state")
-        user_is_in_conversation = False
-        was_playing_before_interruption = False
-        resume_pending = False
+        state_machine_flags["in_conversation"] = False
+        state_machine_flags["was_playing"] = False
+        state_machine_flags["resume_pending"] = False
 
     @session.on("user_state_changed")
     def on_user_state_changed(event):
         """User state changed - pause when user speaks"""
-        nonlocal was_playing_before_interruption, user_is_in_conversation, conversation_timeout_task, resume_pending
+        nonlocal conversation_timeout_task
 
         logger.info(f"👤 User state: {event.old_state} → {event.new_state}")
 
@@ -349,21 +504,21 @@ Remember: Answer the specific question asked. Be helpful and informative without
                 conversation_timeout_task.cancel()
 
             # Only remember playback state on FIRST interruption
-            if not user_is_in_conversation:
-                was_playing_before_interruption = playback_state.get("status") == "playing"
-                logger.info(f"🎙️ User started speaking. Audiobook was: {'playing' if was_playing_before_interruption else 'paused'}")
+            if not state_machine_flags["in_conversation"]:
+                state_machine_flags["was_playing"] = playback_state.get("status") == "playing"
+                logger.info(f"🎙️ User started speaking. Audiobook was: {'playing' if state_machine_flags['was_playing'] else 'paused'}")
 
-            user_is_in_conversation = True
+            state_machine_flags["in_conversation"] = True
 
             # Pause audiobook if it's playing OR if resume is pending
-            if playback_state.get("status") == "playing" or resume_pending:
-                logger.info(f"⏸️ Pausing audiobook (playing={playback_state.get('status')}, resume_pending={resume_pending})")
+            if playback_state.get("status") == "playing" or state_machine_flags["resume_pending"]:
+                logger.info(f"⏸️ Pausing audiobook (playing={playback_state.get('status')}, resume_pending={state_machine_flags['resume_pending']})")
                 asyncio.create_task(send_audiobook_command("pause_audiobook"))
-                resume_pending = False
                 # Remember we were playing if resume was pending
-                if resume_pending and not was_playing_before_interruption:
-                    was_playing_before_interruption = True
+                if state_machine_flags["resume_pending"] and not state_machine_flags["was_playing"]:
+                    state_machine_flags["was_playing"] = True
                     logger.info("📝 Updated was_playing=True (interrupted during resume)")
+                state_machine_flags["resume_pending"] = False
 
         elif event.new_state == "listening":
             # User stopped speaking - start timeout to reset conversation
@@ -372,21 +527,21 @@ Remember: Answer the specific question asked. Be helpful and informative without
     @session.on("agent_state_changed")
     def on_agent_state_changed(event):
         """Agent state changed - resume when agent finishes speaking"""
-        nonlocal was_playing_before_interruption, user_is_in_conversation, conversation_timeout_task, resume_pending
+        nonlocal conversation_timeout_task
 
         logger.info(f"🤖 Agent state: {event.old_state} → {event.new_state}")
 
         if event.new_state == "listening" and event.old_state == "speaking":
             # Agent finished speaking
-            logger.info(f"✅ Agent finished. Should resume? was_playing={was_playing_before_interruption}, in_convo={user_is_in_conversation}")
+            logger.info(f"✅ Agent finished. Should resume? was_playing={state_machine_flags['was_playing']}, in_convo={state_machine_flags['in_conversation']}")
 
-            if was_playing_before_interruption and user_is_in_conversation:
+            if state_machine_flags["was_playing"] and state_machine_flags["in_conversation"]:
                 logger.info("▶️ Resuming audiobook after agent response")
-                resume_pending = True  # Mark that resume is pending
+                state_machine_flags["resume_pending"] = True  # Mark that resume is pending
                 asyncio.create_task(send_audiobook_command("resume_audiobook"))
                 # Reset flags
-                was_playing_before_interruption = False
-                user_is_in_conversation = False
+                state_machine_flags["was_playing"] = False
+                state_machine_flags["in_conversation"] = False
 
                 # Cancel any pending timeout
                 if conversation_timeout_task and not conversation_timeout_task.done():
@@ -395,8 +550,7 @@ Remember: Answer the specific question asked. Be helpful and informative without
                 # Clear resume_pending after the delay (2.5s + buffer)
                 async def clear_resume_pending():
                     await asyncio.sleep(3.0)
-                    nonlocal resume_pending
-                    resume_pending = False
+                    state_machine_flags["resume_pending"] = False
                     logger.info("✓ Resume completed, cleared pending flag")
 
                 asyncio.create_task(clear_resume_pending())

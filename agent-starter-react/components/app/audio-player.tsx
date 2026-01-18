@@ -34,6 +34,7 @@ export function AudioPlayer() {
           setAudiobook(book);
           // Set duration from metadata
           if (book.duration) {
+            console.log('[AudioPlayer] Setting duration from metadata:', book.duration);
             setDuration(book.duration);
           }
         }
@@ -88,6 +89,13 @@ export function AudioPlayer() {
           if (audioRef.current) {
             audioRef.current.currentTime = data.time;
           }
+        } else if (data.action === 'set_speed' && typeof data.speed === 'number') {
+          console.log('[AudioPlayer] ⚡ SETTING SPEED to', data.speed);
+          const newSpeed = Math.max(0.25, Math.min(2.0, data.speed));
+          setPlaybackSpeed(newSpeed);
+          if (audioRef.current) {
+            audioRef.current.playbackRate = newSpeed;
+          }
         }
       } catch (e) {
         // Ignore non-JSON messages
@@ -126,6 +134,7 @@ export function AudioPlayer() {
         status: isPlaying ? 'playing' : 'paused',
         current_time: currentTime,
         duration: duration,
+        playback_speed: playbackSpeed,
       };
       console.log('[AudioPlayer] 📤 Sending playback state:', state);
       const data = encoder.encode(JSON.stringify(state));
@@ -139,7 +148,7 @@ export function AudioPlayer() {
     sendPlaybackState();
 
     return () => clearInterval(interval);
-  }, [session.room, session.isConnected, isPlaying, currentTime, duration]);
+  }, [session.room, session.isConnected, isPlaying, currentTime, duration, playbackSpeed]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -290,7 +299,7 @@ export function AudioPlayer() {
         <div className="mb-6 flex justify-between px-4 text-sm text-gray-600">
           <span>{formatTime(currentTime)}</span>
           <span className="font-medium">{formatTimeLeft(duration - currentTime)}</span>
-          <span>−{formatTime(duration)}</span>
+          <span className="text-gray-600">−{formatTime(duration - currentTime)}</span>
         </div>
 
         {/* Player Controls */}
